@@ -1,0 +1,64 @@
+# Nginx site config: only upstream/server blocks here (no worker_processes or http{} wrapper)
+
+# Use Docker's embedded DNS resolver so nginx can resolve service names at runtime
+resolver 127.0.0.11 valid=30s;
+
+# Custom log format to capture pool, release, upstream details
+log_format bluegreen_access 
+  '[$time_iso8601] '
+  'pool=$upstream_http_x_app_pool '
+  'release=$upstream_http_x_release_id '
+  'status=$status '
+  'upstream_status=$upstream_status '
+  'upstream_addr=$upstream_addr '
+  'request_time=$request_time '
+  'upstream_response_time=$upstream_response_time '
+  'method=$request_method '
+  'uri=$request_uri '
+  'client=$remote_addr';
+
+# Upstream must be placed in shared memory via "zone".
+upstream backend {
+  zone backend 64k;
+  server ${PRIMARY_HOST}:${PORT} resolve max_fails=1 fail_timeout=2s;
+  server ${SECONDARY_HOST}:${PORT} resolve backup;
+  keepalive 16;
+}
+
+server {
+  listen 8080;
+
+  # Write access logs to shared volume with custom format
+  access_log /var/log/nginx/bluegreen_access.log bluegreen_access;
+
+  # Timeouts (total request <= 10s)
+  proxy_connect_timeout 1s;
+  proxy_send_timeout 4s;
+  proxy_read_timeout 4s;
+  send_timeout 5s;
+
+  # retries for errors/timeouts and specific 5xx HTTP codes
+  proxy_next_upstream error timeout http_500 http_502 http_503 http_504;
+  proxy_next_upstream_tries 2;
+
+  # forward request headers (do not strip upstream response headers)
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+
+  location / {
+    proxy_pass http://backend;
+    proxy_buffering off;
+  }
+
+  location /healthz {
+    proxy_pass http://backend/healthz;
+  }
+
+  location /version {
+    proxy_pass http://backend/version;
+  }
+}

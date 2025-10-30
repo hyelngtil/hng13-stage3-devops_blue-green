@@ -1,0 +1,57 @@
+services:
+  nginx:
+    image: nginx:stable-alpine
+    container_name: nginx
+    ports:
+      - "${NGINX_PORT}:8080"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - app_blue
+      - app_green
+    restart: unless-stopped
+
+  app_blue:
+    image: ${BLUE_IMAGE}
+    container_name: app_blue
+    environment:
+      - RELEASE_ID=${RELEASE_ID_BLUE}
+      - APP_POOL=blue
+      - PORT=${PORT}
+    ports:
+      - "${BLUE_HOST_PORT}:${PORT}"
+    restart: unless-stopped
+
+  app_green:
+    image: ${GREEN_IMAGE}
+    container_name: app_green
+    environment:
+      - RELEASE_ID=${RELEASE_ID_GREEN}
+      - APP_POOL=green
+      - PORT=${PORT}
+    ports:
+      - "${GREEN_HOST_PORT}:${PORT}"
+    restart: unless-stopped
+
+  alert_watcher:
+    image: python:3.11-slim
+    container_name: alert_watcher
+    volumes:
+      - ./watcher.py:/app/watcher.py:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+      - nginx_logs:/var/log/nginx:ro
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - ERROR_RATE_THRESHOLD=${ERROR_RATE_THRESHOLD:-2.0}
+      - WINDOW_SIZE=${WINDOW_SIZE:-200}
+      - ALERT_COOLDOWN_SEC=${ALERT_COOLDOWN_SEC:-300}
+      - MAINTENANCE_MODE=${MAINTENANCE_MODE:-false}
+    command: >
+      bash -c "pip install --no-cache-dir -r /app/requirements.txt && python /app/watcher.py"
+    depends_on:
+      - nginx
+    restart: unless-stopped
+
+volumes:
+  nginx_logs:

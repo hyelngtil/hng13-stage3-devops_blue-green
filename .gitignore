@@ -1,0 +1,6 @@
+.env
+nginx/default.conf
+.vscode/
+*.log
+.env.swp
+venv/

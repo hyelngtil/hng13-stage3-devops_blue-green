@@ -1,0 +1,209 @@
+name: Stage-3 BlueGreen with Observability
+
+on: [push, pull_request]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker
+        run: |
+          docker --version
+          
+          # Install docker-compose (standalone)
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
+          
+          # Install perl (for toggle_pool.sh)
+          sudo apt-get update
+          sudo apt-get install -y perl jq
+
+      - name: Copy example env
+        run: |
+          cp .env.example .env
+          # Mock Slack webhook for CI (won't actually send)
+          echo "SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX" >> .env
+
+      - name: Create nginx directory
+        run: mkdir -p nginx
+
+      - name: Start stack
+        run: |
+          chmod +x start.sh
+          ./start.sh
+          sleep 5
+
+      - name: Verify all containers running
+        run: |
+          echo "Checking container status..."
+          docker-compose ps
+          
+          # Ensure all 4 containers are up
+          RUNNING=$(docker-compose ps --services --filter "status=running" | wc -l)
+          if [ "$RUNNING" != "4" ]; then
+            echo "❌ Expected 4 containers running, got $RUNNING"
+            docker-compose ps
+            exit 1
+          fi
+          echo "✅ All 4 containers running (nginx, app_blue, app_green, alert_watcher)"
+
+      - name: Verify watcher is healthy
+        run: |
+          echo "Checking alert_watcher logs..."
+          docker logs alert_watcher | head -20
+          
+          # Check if watcher started successfully
+          if docker logs alert_watcher 2>&1 | grep -q "BlueGreen Log Watcher starting"; then
+            echo "✅ Watcher started successfully"
+          else
+            echo "❌ Watcher failed to start"
+            docker logs alert_watcher
+            exit 1
+          fi
+
+      - name: Baseline check via nginx
+        run: |
+          echo "Checking nginx endpoint..."
+          curl -s -D - http://localhost:8080/version -o /tmp/version_out || true
+          
+          echo "Response headers:"
+          grep -i "HTTP/" /tmp/version_out || true
+          grep -i "X-App-Pool" /tmp/version_out || true
+          grep -i "X-Release-Id" /tmp/version_out || true
+          
+          # Verify Blue is active
+          if grep -q "X-App-Pool: blue" /tmp/version_out; then
+            echo "✅ Blue is active (baseline correct)"
+          else
+            echo "❌ Expected Blue to be active"
+            cat /tmp/version_out
+            exit 1
+          fi
+
+      - name: Verify Nginx logs have structured format
+        run: |
+          echo "Checking Nginx log format..."
+          sleep 2
+          
+          # Generate a request to ensure logs exist
+          curl -s http://localhost:8080/version > /dev/null
+          sleep 1
+          
+          # Check log format
+          docker exec nginx tail -5 /var/log/nginx/bluegreen_access.log
+          
+          if docker exec nginx tail -1 /var/log/nginx/bluegreen_access.log | grep -q "pool="; then
+            echo "✅ Nginx logs contain structured data (pool field found)"
+          else
+            echo "❌ Nginx logs missing structured format"
+            docker exec nginx tail -10 /var/log/nginx/bluegreen_access.log
+            exit 1
+          fi
+
+      - name: Trigger chaos on blue
+        run: |
+          echo "Triggering chaos on blue app..."
+          curl -s -X POST "http://localhost:8081/chaos/start?mode=error" || true
+          sleep 1
+
+      - name: Run multiple requests and verify failover
+        run: |
+          echo "Testing failover with 20 requests..."
+          PASS=0
+          GREEN_COUNT=0
+          
+          for i in $(seq 1 20); do
+            HEADERS=$(curl -s -D - http://localhost:8080/version -o /dev/null)
+            echo "$i -> $(echo "$HEADERS" | egrep -i 'X-App-Pool|HTTP/' | tr '\n' ' ')"
+            
+            # Check for 200 status
+            if ! echo "$HEADERS" | egrep -qi 'HTTP/.*200'; then
+              echo "❌ Non-200 detected at request $i"
+              echo "$HEADERS"
+              exit 1
+            fi
+            
+            # Count green responses
+            if echo "$HEADERS" | egrep -qi 'X-App-Pool: green'; then
+              GREEN_COUNT=$((GREEN_COUNT+1))
+            fi
+            
+            PASS=$((PASS+1))
+            sleep 0.25
+          done
+          
+          echo "✅ All $PASS requests returned 200 OK"
+          echo "✅ Green responses: $GREEN_COUNT out of 20"
+          
+          # Verify failover happened (at least 15 out of 20 should be green)
+          if [ $GREEN_COUNT -lt 15 ]; then
+            echo "❌ Failover did not occur properly. Expected ≥15 green responses, got $GREEN_COUNT"
+            exit 1
+          fi
+          
+          echo "✅ Failover successful!"
+
+      - name: Verify watcher detected failover
+        run: |
+          echo "Checking if watcher detected failover..."
+          sleep 2
+          
+          docker logs alert_watcher | tail -50
+          
+          if docker logs alert_watcher | grep -q "FAILOVER"; then
+            echo "✅ Watcher detected failover event"
+          else
+            echo "⚠️  Watcher may not have detected failover (check logs manually)"
+            # Don't fail CI - alert delivery is not testable without real Slack
+          fi
+
+      - name: Verify structured logs captured failover
+        run: |
+          echo "Checking Nginx logs for pool transition..."
+          
+          # Show last 30 log lines
+          docker exec nginx tail -30 /var/log/nginx/bluegreen_access.log
+          
+          # Check if both blue and green appear in logs
+          if docker exec nginx tail -30 /var/log/nginx/bluegreen_access.log | grep -q "pool=blue"; then
+            echo "✅ Blue pool logged"
+          fi
+          
+          if docker exec nginx tail -30 /var/log/nginx/bluegreen_access.log | grep -q "pool=green"; then
+            echo "✅ Green pool logged (failover captured in logs)"
+          else
+            echo "❌ Green pool not found in logs"
+            exit 1
+          fi
+
+      - name: Stop chaos on blue
+        run: |
+          echo "Stopping chaos..."
+          curl -s -X POST "http://localhost:8081/chaos/stop" || true
+
+      - name: Show final status
+        if: always()
+        run: |
+          echo "=== Container Status ==="
+          docker-compose ps
+          
+          echo ""
+          echo "=== Nginx Logs (last 10 lines) ==="
+          docker-compose logs nginx | tail -10
+          
+          echo ""
+          echo "=== Watcher Logs (last 20 lines) ==="
+          docker-compose logs alert_watcher | tail -20
+          
+          echo ""
+          echo "=== Nginx Access Logs (last 10 lines) ==="
+          docker exec nginx tail -10 /var/log/nginx/bluegreen_access.log || true
+
+      - name: Tear down
+        if: always()
+        run: docker-compose down -v
