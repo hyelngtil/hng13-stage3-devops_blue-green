@@ -72,19 +72,16 @@ jobs:
       - name: Baseline check via nginx
         run: |
           echo "Checking nginx endpoint..."
-          curl -s -D - http://localhost:8080/version -o /tmp/version_out || true
+          RESPONSE=$(curl -s -D - http://localhost:8080/version)
+          echo "$RESPONSE"
           
-          echo "Response headers:"
-          grep -i "HTTP/" /tmp/version_out || true
-          grep -i "X-App-Pool" /tmp/version_out || true
-          grep -i "X-Release-Id" /tmp/version_out || true
+          # Extract pool from headers
+          POOL=$(echo "$RESPONSE" | grep -i "X-App-Pool" | awk '{print $2}' | tr -d '\r')
           
-          # Verify Blue is active
-          if grep -q "X-App-Pool: blue" /tmp/version_out; then
+          if [[ "$POOL" == "blue" ]]; then
             echo "✅ Blue is active (baseline correct)"
           else
-            echo "❌ Expected Blue to be active"
-            cat /tmp/version_out
+            echo "❌ Expected Blue to be active, got: '$POOL'"
             exit 1
           fi
 
@@ -121,18 +118,22 @@ jobs:
           GREEN_COUNT=0
           
           for i in $(seq 1 20); do
-            HEADERS=$(curl -s -D - http://localhost:8080/version -o /dev/null)
-            echo "$i -> $(echo "$HEADERS" | egrep -i 'X-App-Pool|HTTP/' | tr '\n' ' ')"
+            RESPONSE=$(curl -s -D - http://localhost:8080/version -o /dev/null)
+            
+            # Extract pool and status
+            POOL=$(echo "$RESPONSE" | grep -i "X-App-Pool" | awk '{print $2}' | tr -d '\r')
+            STATUS=$(echo "$RESPONSE" | grep -i "HTTP/" | awk '{print $2}')
+            
+            echo "$i -> Status: $STATUS, Pool: $POOL"
             
             # Check for 200 status
-            if ! echo "$HEADERS" | egrep -qi 'HTTP/.*200'; then
-              echo "❌ Non-200 detected at request $i"
-              echo "$HEADERS"
+            if [[ "$STATUS" != "200" ]]; then
+              echo "❌ Non-200 detected at request $i (got $STATUS)"
               exit 1
             fi
             
             # Count green responses
-            if echo "$HEADERS" | egrep -qi 'X-App-Pool: green'; then
+            if [[ "$POOL" == "green" ]]; then
               GREEN_COUNT=$((GREEN_COUNT+1))
             fi
             
