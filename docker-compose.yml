@@ -47,8 +47,9 @@ services:
       - WINDOW_SIZE=${WINDOW_SIZE:-200}
       - ALERT_COOLDOWN_SEC=${ALERT_COOLDOWN_SEC:-300}
       - MAINTENANCE_MODE=${MAINTENANCE_MODE:-false}
+      - PYTHONUNBUFFERED=1
     command: >
-      bash -c "pip install --no-cache-dir -r /app/requirements.txt && python /app/watcher.py"
+      bash -c "pip install --no-cache-dir -q -r /app/requirements.txt && python -u /app/watcher.py"
     depends_on:
       - nginx
     restart: unless-stopped

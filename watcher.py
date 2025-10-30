@@ -20,7 +20,7 @@ ALERT_COOLDOWN_SEC = int(os.getenv('ALERT_COOLDOWN_SEC', '300'))  # 5 minutes
 MAINTENANCE_MODE = os.getenv('MAINTENANCE_MODE', 'false').lower() == 'true'
 LOG_FILE = '/var/log/nginx/bluegreen_access.log'
 
-# Track state
+# State tracking
 last_pool = None
 request_window = deque(maxlen=WINDOW_SIZE)
 last_alert_time = {
@@ -76,7 +76,7 @@ def send_slack_alert(message, alert_type='info'):
 
 def parse_log_line(line):
     """Parse Nginx log line and extract relevant fields"""
-    
+   
     data = {}
     
     # Extract timestamp
@@ -140,15 +140,19 @@ def check_error_rate():
 
 def tail_file(filename):
     """Tail a file like 'tail -f'"""
-    with open(filename, 'r') as f:
-        # Go to end of file
-        f.seek(0, 2)
-        while True:
-            line = f.readline()
-            if not line:
-                time.sleep(0.1)
-                continue
-            yield line
+    try:
+        with open(filename, 'r') as f:
+            # Go to end of file
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+                yield line
+    except Exception as e:
+        print(f"[ERROR] Failed to tail file: {e}")
+        raise
 
 def main():
     print(f"[START] BlueGreen Log Watcher starting...")
@@ -160,11 +164,19 @@ def main():
     print(f"[INFO] Monitoring: {LOG_FILE}")
     
     # Wait for log file to exist
+    retries = 0
+    max_retries = 30
     while not os.path.exists(LOG_FILE):
-        print(f"[WAIT] Waiting for log file to be created...")
-        time.sleep(2)
+        retries += 1
+        if retries > max_retries:
+            print(f"[ERROR] Log file not created after {max_retries} seconds. Check Nginx container.")
+            print(f"[INFO] Continuing anyway - will start monitoring once file appears...")
+            break
+        print(f"[WAIT] Waiting for log file to be created... ({retries}/{max_retries})")
+        time.sleep(1)
     
-    print(f"[INFO] Log file found, starting monitoring...")
+    if os.path.exists(LOG_FILE):
+        print(f"[INFO] Log file found, starting monitoring...")
     
     # Send startup notification
     send_slack_alert(
@@ -173,42 +185,58 @@ def main():
     )
     
     try:
-        for line in tail_file(LOG_FILE):
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Parse log line
-            data = parse_log_line(line)
-            
-            if not data:
-                continue
-            
-            # Track pool for failover detection
-            pool = data.get('pool', '')
-            if pool in ['blue', 'green']:
-                check_failover(pool)
-            
-            # Track status for error rate
+        # Keep trying to tail the file even if it doesn't exist yet
+        while True:
             try:
-                status = int(data.get('status', '0'))
-                if status > 0:
-                    request_window.append(status)
-                    check_error_rate()
-            except ValueError:
-                pass
-            
-            # Debug output every 50 requests
-            if len(request_window) % 50 == 0 and len(request_window) > 0:
-                error_count = sum(1 for s in request_window if s >= 500)
-                error_rate = (error_count / len(request_window)) * 100
-                print(f"[STATS] Processed {len(request_window)} requests, "
-                      f"current pool: {pool}, error rate: {error_rate:.1f}%")
+                if not os.path.exists(LOG_FILE):
+                    print(f"[WAIT] Log file not found, waiting...")
+                    time.sleep(2)
+                    continue
+                    
+                for line in tail_file(LOG_FILE):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Parse log line
+                    data = parse_log_line(line)
+                    
+                    if not data:
+                        continue
+                    
+                    # Track pool for failover detection
+                    pool = data.get('pool', '')
+                    if pool in ['blue', 'green']:
+                        check_failover(pool)
+                    
+                    # Track status for error rate
+                    try:
+                        status = int(data.get('status', '0'))
+                        if status > 0:
+                            request_window.append(status)
+                            check_error_rate()
+                    except ValueError:
+                        pass
+                    
+                    # Debug output every 50 requests
+                    if len(request_window) % 50 == 0 and len(request_window) > 0:
+                        error_count = sum(1 for s in request_window if s >= 500)
+                        error_rate = (error_count / len(request_window)) * 100
+                        print(f"[STATS] Processed {len(request_window)} requests, "
+                              f"current pool: {pool}, error rate: {error_rate:.1f}%")
+            except FileNotFoundError:
+                print(f"[WARN] Log file disappeared, waiting for it to reappear...")
+                time.sleep(2)
+            except Exception as e:
+                print(f"[ERROR] Error in monitoring loop: {e}")
+                time.sleep(5)
     
     except KeyboardInterrupt:
         print("\n[STOP] Watcher stopped by user")
     except Exception as e:
         print(f"[ERROR] Watcher crashed: {e}")
+        import traceback
+        traceback.print_exc()
         send_slack_alert(f"Watcher crashed: {e}", alert_type='error_rate')
 
 if __name__ == '__main__':

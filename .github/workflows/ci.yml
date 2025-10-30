@@ -55,14 +55,17 @@ jobs:
       - name: Verify watcher is healthy
         run: |
           echo "Checking alert_watcher logs..."
-          docker logs alert_watcher | head -20
+          docker logs alert_watcher 2>&1 | tail -30
           
           # Check if watcher started successfully
           if docker logs alert_watcher 2>&1 | grep -q "BlueGreen Log Watcher starting"; then
             echo "✅ Watcher started successfully"
           else
             echo "❌ Watcher failed to start"
-            docker logs alert_watcher
+            echo "=== Full Watcher Logs ==="
+            docker logs alert_watcher 2>&1
+            echo "=== Watcher Container Status ==="
+            docker inspect alert_watcher --format='{{.State.Status}}: {{.State.Error}}'
             exit 1
           fi
 
