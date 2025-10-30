@@ -1,4 +1,4 @@
-# Blue/Green Deployment Runbook
+# Blue/Green Deployment Observability & Alerts (Log-Watcher + Slack) Runbook
 
 ## Overview
 This runbook provides operational procedures for responding to alerts from the Blue/Green deployment monitoring system. The alert watcher monitors Nginx logs and sends Slack notifications when issues are detected.
@@ -7,7 +7,7 @@ This runbook provides operational procedures for responding to alerts from the B
 
 ## Alert Types & Response Procedures
 
-### 🚨 Alert: Failover Detected
+### Alert: Failover Detected
 
 **Example Message:**
 ```
@@ -34,12 +34,6 @@ This runbook provides operational procedures for responding to alerts from the B
    # If Green failed:
    docker logs app_green --tail 50
    ```
-
-3. **Look for common issues:**
-   - Out of memory errors
-   - Unhandled exceptions
-   - Database connection failures
-   - External service timeouts
 
 **Recovery Steps:**
 
@@ -70,7 +64,7 @@ curl -i http://localhost:8080/version
 
 ---
 
-### ⚠️ Alert: High Error Rate
+### Alert: High Error Rate
 
 **Example Message:**
 ```
@@ -149,7 +143,7 @@ docker compose down
 
 ---
 
-### ✅ Alert: Recovery
+###2 Alert: Recovery
 
 **Example Message:**
 ```
@@ -160,83 +154,6 @@ docker compose down
 - System has recovered from previous error state
 - All recent requests are successful
 - No immediate action needed
-
-**Follow-up Actions:**
-1. **Document the incident:**
-   - What triggered the alert
-   - What actions were taken
-   - Root cause if identified
-
-2. **Review logs for patterns:**
-   ```bash
-   docker logs app_blue --since 1h > /tmp/blue_incident.log
-   docker logs app_green --since 1h > /tmp/green_incident.log
-   ```
-
-3. **Update monitoring if needed:**
-   - Adjust thresholds if false positive
-   - Add additional health checks
-
----
-
-## Planned Maintenance Procedures
-
-### Deploying New Versions (Zero Downtime)
-
-**Step 1: Enable Maintenance Mode**
-```bash
-# Edit .env
-MAINTENANCE_MODE=true
-
-# Restart watcher to apply
-docker restart alert_watcher
-```
-This suppresses failover alerts during planned toggles.
-
-**Step 2: Update One Pool**
-```bash
-# Ensure Blue is active, update Green
-# Edit .env:
-GREEN_IMAGE=yimikaade/wonderful:new-version
-
-# Restart Green only
-docker compose up -d --no-deps app_green
-
-# Wait for Green to be healthy
-curl http://localhost:8082/healthz
-```
-
-**Step 3: Switch Traffic to Updated Pool**
-```bash
-./toggle_pool.sh
-
-# Verify new version is serving
-curl -i http://localhost:8080/version
-# Should show X-Release-Id for new version
-```
-
-**Step 4: Update Second Pool**
-```bash
-# Now update Blue (no longer serving traffic)
-# Edit .env:
-BLUE_IMAGE=yimikaade/wonderful:new-version
-
-# Restart Blue
-docker compose up -d --no-deps app_blue
-
-# Verify both pools match
-curl http://localhost:8081/version
-curl http://localhost:8082/version
-```
-
-**Step 5: Disable Maintenance Mode**
-```bash
-# Edit .env
-MAINTENANCE_MODE=false
-
-# Restart watcher
-docker restart alert_watcher
-```
 
 ### Manual Failover for Testing
 
@@ -253,36 +170,6 @@ docker logs -f alert_watcher
 curl -X POST "http://localhost:8081/chaos/stop"
 ```
 
----
-
-## Monitoring Commands Cheat Sheet
-
-```bash
-# View all container status
-docker compose ps
-
-# Follow watcher logs live
-docker logs -f alert_watcher
-
-# Check current active pool
-curl -s http://localhost:8080/version | jq '.pool'
-
-# View Nginx access logs
-docker exec nginx tail -f /var/log/nginx/bluegreen_access.log
-
-# Check error rate manually
-docker exec nginx tail -200 /var/log/nginx/bluegreen_access.log | grep -c "status=5"
-
-# Restart everything
-docker compose restart
-
-# Full cleanup and restart
-docker compose down -v
-./start.sh
-```
-
----
-
 ## Alert Thresholds & Tuning
 
 Current configuration (in `.env`):
@@ -298,17 +185,6 @@ Current configuration (in `.env`):
 - **Missing real issues**: Decrease `ERROR_RATE_THRESHOLD` to 1%
 - **Alert spam**: Increase `ALERT_COOLDOWN_SEC` to 600 (10 min)
 - **Need faster detection**: Decrease `WINDOW_SIZE` to 100
-
-**To apply changes:**
-```bash
-# Edit .env with new values
-vim .env
-
-# Restart watcher
-docker restart alert_watcher
-```
-
----
 
 ## Troubleshooting
 
@@ -350,54 +226,7 @@ docker exec nginx tail -5 /var/log/nginx/bluegreen_access.log
 docker restart alert_watcher
 docker logs -f alert_watcher
 ```
-
-### Both Pools Down
-
-**This is a critical failure. Immediate steps:**
-
-1. **Check container status:**
-   ```bash
-   docker compose ps
-   # All should be "Up"
-   ```
-
-2. **Check resource limits:**
-   ```bash
-   docker stats --no-stream
-   # Look for memory/CPU exhaustion
-   ```
-
-3. **Restart entire stack:**
-   ```bash
-   docker compose restart
-   ```
-
-4. **If still failing, rebuild:**
-   ```bash
-   docker compose down -v
-   docker compose pull
-   ./start.sh
-   ```
-
-5. **Escalate immediately** - this means total service outage
-
 ---
-
-## Contact & Escalation
-
-- **DevOps Team**: [Your Slack channel / PagerDuty]
-- **Database Team**: [Contact info]
-- **Platform Team**: [Contact info]
-
-**Severity Levels:**
-- **SEV1 (Critical)**: Both pools down, >10% error rate
-- **SEV2 (High)**: Single pool down, 5-10% error rate
-- **SEV3 (Medium)**: Repeated failovers, 2-5% error rate
-- **SEV4 (Low)**: Single failover, <2% error rate
-
----
-
-## Appendix: Understanding the System
 
 ### How Failover Works
 1. Nginx sends request to primary pool (e.g., Blue)
@@ -405,21 +234,3 @@ docker logs -f alert_watcher
 3. After `max_fails=1` failure, Blue is marked down for `fail_timeout=2s`
 4. Nginx immediately retries request to backup pool (Green)
 5. Client receives response from Green (transparent failover)
-
-### Log Format Fields
-- `pool`: Which app pool served the request (blue/green)
-- `release`: Release identifier from app
-- `status`: HTTP status returned to client
-- `upstream_status`: Actual status from upstream app
-- `upstream_addr`: IP:port of upstream that handled request
-- `request_time`: Total request time (including retries)
-- `upstream_response_time`: Time spent in upstream app
-
-### Alert Cooldown Logic
-Prevents alert spam. Example:
-- Failover detected at 14:00:00
-- Alert sent to Slack
-- Another failover at 14:02:00
-- Alert suppressed (cooldown = 300s = 5 min)
-- Next failover at 14:06:00
-- Alert sent again

@@ -20,7 +20,7 @@ log_format bluegreen_access
 # Upstream must be placed in shared memory via "zone".
 upstream backend {
   zone backend 64k;
-  server ${PRIMARY_HOST}:${PORT} resolve max_fails=1 fail_timeout=2s;
+  server ${PRIMARY_HOST}:${PORT} resolve max_fails=2 fail_timeout=3s;
   server ${SECONDARY_HOST}:${PORT} resolve backup;
   keepalive 16;
 }

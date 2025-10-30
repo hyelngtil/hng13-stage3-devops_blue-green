@@ -1,6 +1,6 @@
-# Blue/Green Deployment with Observability & Alerts (Stage 3)
+# Blue/Green Deployment with Observability & Alerts
 
-A production-ready Blue/Green deployment system using Nginx upstream load balancing with automatic failover, real-time monitoring, and Slack alerting capabilities.
+A Blue/Green deployment system using Nginx upstream load balancing with automatic failover, real-time monitoring, and Slack alerting capabilities.
 
 ## Architecture Overview
 
@@ -60,7 +60,7 @@ cp .env.example .env
 
 # IMPORTANT: Configure Slack webhook in .env
 # Get your webhook from: https://api.slack.com/messaging/webhooks
-vim .env  # Set SLACK_WEBHOOK_URL
+nano .env  # Set SLACK_WEBHOOK_URL
 
 # Make scripts executable
 chmod +x start.sh verify.sh toggle_pool.sh
@@ -117,7 +117,7 @@ curl -X POST "http://localhost:8081/chaos/start?mode=error"
 **Expected Behavior:**
 - First 1-2 requests show Blue (200 OK)
 - Nginx detects Blue failures (500 errors)
-- **Watcher detects failover and sends Slack alert** 🚨
+- **Watcher detects failover and sends Slack alert**
 - Automatically switches to Green within 2-3 seconds
 - All subsequent requests show Green (200 OK)
 - **Zero 5xx errors to clients** (Nginx retries to backup)
@@ -156,7 +156,7 @@ ACTIVE_POOL=blue                # Initial active pool (blue/green)
 BLUE_IMAGE=yimikaade/wonderful:devops-stage-two
 GREEN_IMAGE=yimikaade/wonderful:devops-stage-two
 
-# Observability Configuration (Stage 3)
+# Observability Configuration
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 ERROR_RATE_THRESHOLD=2.0        # Alert when error rate exceeds this %
 WINDOW_SIZE=200                 # Track last N requests
@@ -282,31 +282,8 @@ docker logs alert_watcher | grep STATS
 
 ### Debugging Alerts
 
-**No Slack alerts received:**
-```bash
-# Check watcher logs
-docker logs alert_watcher | grep -i slack
-
-# Verify webhook URL
-docker exec alert_watcher env | grep SLACK_WEBHOOK_URL
-
-# Test webhook manually
-curl -X POST $SLACK_WEBHOOK_URL \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Test alert"}'
-```
-
-**Watcher not detecting failovers:**
-```bash
-# Check log file exists
-docker exec alert_watcher ls -la /var/log/nginx/
-
-# Verify log format
-docker exec nginx tail -5 /var/log/nginx/bluegreen_access.log
-
-# Restart watcher
-docker restart alert_watcher
-```
+**No Slack alerts received, Watcher not detecting failovers:**
+see [runbook.md]
 
 ## Operational Procedures
 
@@ -317,22 +294,17 @@ See [runbook.md](./runbook.md) for detailed procedures:
 - Troubleshooting guide
 - Escalation procedures
 
-**Quick Reference:**
-- **Failover Alert**: Check failed pool logs, restart container if needed
-- **Error Rate Alert**: Check both pools, look for resource/backend issues
-- **Planned Deployment**: Enable `MAINTENANCE_MODE=true` before toggling
-
 ## CI/CD Pipeline
 ### GitHub Actions Workflow
 The `.github/workflows/ci.yml` automatically:
-1. ✅ Starts the full stack (including watcher)
-2. ✅ Verifies baseline (Blue active)
-3. ✅ Triggers chaos on Blue
-4. ✅ Validates automatic failover
-5. ✅ Ensures zero 5xx errors
-6. ✅ Confirms Green takes over
-7. ✅ Verifies logs show structured format
-8. ✅ Stops chaos and cleans up
+1. Starts the full stack (including watcher)
+2. Verifies baseline (Blue active)
+3. Triggers chaos on Blue
+4. Validates automatic failover
+5. Ensures zero 5xx errors
+6. Confirms Green takes over
+7. Verifies logs show structured format
+8. Stops chaos and cleans up
 
 **Trigger Events:**
 - Push to any branch
@@ -374,70 +346,10 @@ The `.github/workflows/ci.yml` automatically:
 | Planned maintenance | Manual toggle | Graceful switch | 0s | ❌ (Maintenance mode) |
 | High backend errors | Error rate tracking | Alert operator | N/A | ✅ Error rate |
 
-## Screenshots (For Submission)
-
-Ensure you capture the following for your Stage 3 submission:
-
-### Required Screenshots:
-1. **Slack Failover Alert**
-   - Shows: "🚨 Failover Detected: BLUE → GREEN" message
-   - Include: Timestamp, alert details
-
-2. **Slack Error Rate Alert**
-   - Shows: "⚠️ High Error Rate: X% (>2.0%)" message
-   - Include: Error count, threshold
-
-3. **Nginx Structured Logs**
-   - Command: `docker exec nginx tail -20 /var/log/nginx/bluegreen_access.log`
-   - Shows: `pool=`, `release=`, `status=`, `upstream_status=` fields
-
-4. **Watcher Logs**
-   - Command: `docker logs alert_watcher --tail 50`
-   - Shows: Failover detection, stats output
-
-5. **Container Status**
-   - Command: `docker compose ps`
-   - Shows: All 4 containers running (nginx, app_blue, app_green, alert_watcher)
-
-### How to Capture:
-```bash
-# Generate failover event
-curl -X POST "http://localhost:8081/chaos/start?mode=error"
-for i in {1..20}; do curl -s http://localhost:8080/version | jq -r '.pool'; sleep 0.3; done
-
-# Wait for Slack alerts (check your Slack channel)
-# Screenshot 1: Failover alert in Slack
-
-# Screenshot 2: Nginx logs
-docker exec nginx tail -20 /var/log/nginx/bluegreen_access.log
-
-# Screenshot 3: Watcher logs
-docker logs alert_watcher --tail 50
-
-# Generate error rate alert
-curl -X POST "http://localhost:8081/chaos/start?mode=error"
-curl -X POST "http://localhost:8082/chaos/start?mode=error"
-for i in {1..50}; do curl -s http://localhost:8080/version; sleep 0.1; done
-
-# Screenshot 4: Error rate alert in Slack
-
-# Screenshot 5: Container status
-docker compose ps
-```
-
 ## Cleanup
 ```bash
-# Stop all containers
-docker compose down
-
 # Remove volumes and networks
 docker compose down -v
-
-# Remove generated configs
-rm -f nginx/default.conf
-
-# Full cleanup (removes images)
-docker compose down -v --rmi all
 ```
 
 ## Troubleshooting
@@ -451,9 +363,6 @@ docker logs alert_watcher
 
 # Common cause: Missing requirements.txt
 # Solution: Ensure requirements.txt exists with "requests==2.31.0"
-
-# Restart watcher
-docker restart alert_watcher
 ```
 
 **Issue: No Slack alerts**
@@ -465,16 +374,10 @@ grep SLACK_WEBHOOK_URL .env
 curl -X POST YOUR_WEBHOOK_URL \
   -H 'Content-Type: application/json' \
   -d '{"text":"Test from troubleshooting"}'
-
-# Check watcher sees the webhook
-docker exec alert_watcher env | grep SLACK
 ```
 
 **Issue: Logs not appearing**
 ```bash
-# Check volume mount
-docker inspect nginx | grep -A 5 Mounts
-
 # Verify log file exists
 docker exec nginx ls -la /var/log/nginx/
 
@@ -509,5 +412,3 @@ Expected output when all checks pass:
 
 **Stage 2 Complete**: Auto-failover + Manual toggle  
 **Stage 3 Complete**: Observability + Slack alerts + Operational runbook
-
-Ready for production! 🚀
