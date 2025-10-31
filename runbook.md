@@ -143,7 +143,7 @@ docker compose down
 
 ---
 
-###2 Alert: Recovery
+###1 Alert: Recovery
 
 **Example Message:**
 ```

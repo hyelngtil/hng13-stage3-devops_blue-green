@@ -10,7 +10,7 @@ import re
 import time
 import requests
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # Configuration from environment variables
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL', '')
@@ -19,6 +19,10 @@ WINDOW_SIZE = int(os.getenv('WINDOW_SIZE', '200'))  # requests
 ALERT_COOLDOWN_SEC = int(os.getenv('ALERT_COOLDOWN_SEC', '300'))  # 5 minutes
 MAINTENANCE_MODE = os.getenv('MAINTENANCE_MODE', 'false').lower() == 'true'
 LOG_FILE = '/var/log/nginx/bluegreen_access.log'
+
+# Timezone configuration (default UTC+1 for WAT - West Africa Time)
+TZ_OFFSET = int(os.getenv('TZ_OFFSET_HOURS', '1'))
+LOCAL_TZ = timezone(timedelta(hours=TZ_OFFSET))
 
 # State tracking
 last_pool = None
@@ -76,7 +80,9 @@ def send_slack_alert(message, alert_type='info'):
 
 def parse_log_line(line):
     """Parse Nginx log line and extract relevant fields"""
-   
+    # Example log format:
+    # [2025-10-30T12:34:56+00:00] pool=blue release=release-blue-001 status=200 upstream_status=200 ...
+    
     data = {}
     
     # Extract timestamp
@@ -113,7 +119,8 @@ def check_failover(current_pool):
         return
     
     if current_pool != last_pool and current_pool in ['blue', 'green']:
-        message = f"Failover Detected: {last_pool.upper()} → {current_pool.upper()} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        now_local = datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+        message = f"Failover Detected: {last_pool.upper()} → {current_pool.upper()} at {now_local}"
         print(f"[FAILOVER] {message}")
         send_slack_alert(message, alert_type='failover')
         last_pool = current_pool
