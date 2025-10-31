@@ -72,11 +72,13 @@ jobs:
       - name: Baseline check via nginx
         run: |
           echo "Checking nginx endpoint..."
-          RESPONSE=$(curl -s -D - http://localhost:8080/version)
-          echo "$RESPONSE"
+          curl -s -i http://localhost:8080/version > /tmp/response.txt
+          cat /tmp/response.txt
           
           # Extract pool from headers
-          POOL=$(echo "$RESPONSE" | grep -i "X-App-Pool" | awk '{print $2}' | tr -d '\r')
+          POOL=$(grep -i "X-App-Pool:" /tmp/response.txt | awk '{print $2}' | tr -d '\r\n ')
+          
+          echo "Extracted pool: '$POOL'"
           
           if [[ "$POOL" == "blue" ]]; then
             echo "✅ Blue is active (baseline correct)"
