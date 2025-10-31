@@ -20,8 +20,12 @@ ALERT_COOLDOWN_SEC = int(os.getenv('ALERT_COOLDOWN_SEC', '300'))  # 5 minutes
 MAINTENANCE_MODE = os.getenv('MAINTENANCE_MODE', 'false').lower() == 'true'
 LOG_FILE = '/var/log/nginx/bluegreen_access.log'
 
-# Timezone configuration (default UTC+1 for WAT - West Africa Time)
-TZ_OFFSET = int(os.getenv('TZ_OFFSET_HOURS', '1'))
+# Timezone configuration (default UTC+1 for WAT)
+try:
+    TZ_OFFSET = int(os.getenv('TZ_OFFSET_HOURS', '1').strip())
+except (ValueError, AttributeError):
+    print("[WARN] Invalid TZ_OFFSET_HOURS, defaulting to UTC+1")
+    TZ_OFFSET = 1
 LOCAL_TZ = timezone(timedelta(hours=TZ_OFFSET))
 
 # State tracking
@@ -80,9 +84,7 @@ def send_slack_alert(message, alert_type='info'):
 
 def parse_log_line(line):
     """Parse Nginx log line and extract relevant fields"""
-    # Example log format:
-    # [2025-10-30T12:34:56+00:00] pool=blue release=release-blue-001 status=200 upstream_status=200 ...
-    
+   
     data = {}
     
     # Extract timestamp
